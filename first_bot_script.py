@@ -1,6 +1,9 @@
 import time
 import sys
 import telebot
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from datetime import datetime, timedelta
 from telebot import types
 from requests import ReadTimeout
 import os
@@ -10,6 +13,12 @@ import text_messages_storage
 
 bot = telebot.TeleBot(config.first_bot_token())
 bot.parse_mode = 'html'
+
+jobstores = {
+    'default': SQLAlchemyJobStore(url='sqlite:///jobs.sqlite')
+}
+scheduler = BackgroundScheduler(jobstores=jobstores)
+scheduler.start()
 
 
 @bot.message_handler(commands=['start'])
@@ -29,6 +38,7 @@ def start_message_handler(message):
 
 @bot.message_handler(content_types=['location'])
 def handle_location(message):
+    scheduler.remove_job(f"{message.chat.id}_location_remind")
     location = message.location
     lat, long = location.latitude, location.longitude
     user = data_base_functions.SQLiteUser(message.chat.id)
@@ -43,9 +53,20 @@ def handle_location(message):
 
 @bot.message_handler(content_types=['text'])
 def text_message_handler(message):
-    if message.text == "Получить баллы":
+    if message.text == "Получить баллы":  # full cringe is coming (sorry, just too lazy)
+        try:
+            text_to_remind = ("Вы уверены, что не хотите вступить в закрытый чат монтажников?\n"
+                              "Напоминаем что там есть возможность задавать вопросы, обмен опытом, "
+                              "участие в обсуждениях, развитие навыков и конечно же получение заказов!)\n\n"
+                              "Применяйте опыт нескольких сотен профессионалов, для увеличения Вашего дохода от "
+                              "монтажа и повышения лояльности заказчика!")
+            schedule_reminder(message.chat.id, f"{message.chat.id}_register_confirmation_1_remind", 30, text_to_remind)
+            text_to_remind = "Вы не можете завершить регистрацию без вступления в закрытый чат"
+            schedule_reminder(message.chat.id, f"{message.chat.id}_register_confirmation_2_remind", 120, text_to_remind)
+        except Exception as eerr:
+            pass
         markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("Подписаться", url="https://t.me/+o_1ua731zKAxZjhi"))
+        markup.add(types.InlineKeyboardButton("Подписаться", url="https://t.me/+CTnu89sSY9FiZDY9"))
         markup.add(types.InlineKeyboardButton("Я подписался", callback_data="check_subscription_stage"))
         bot.send_message(
             message.chat.id, "Подпишитесь на закрытый Telegram-чат клуба, чтобы быть в курсе всех новостей: "
@@ -118,6 +139,9 @@ def inline_handler(call):
                                                    "виды работ, которые вы выполняете:", reply_markup=markup)
         elif call.data == "next_step_registration":
             msg = bot.send_message(call.message.chat.id, text_messages_storage.message_definer(4))
+            text_to_remind = """Кажется, Вы забыли указать свой город. Давайте попробуем снова: из какого вы города?
+Нам необходима эта информация, чтобы сузить географию работ, когда мы будем искать для вас подходящий заказ"""
+            schedule_reminder(msg.chat.id, f"{msg.chat.id}_city_remind", 30, text_to_remind)
             bot.register_next_step_handler(msg, registration_city_defining)
         elif call.data == "back_to_start_menu":
             markup = types.InlineKeyboardMarkup(row_width=1)
@@ -139,6 +163,8 @@ def inline_handler(call):
         elif call.data == "check_subscription_stage":
             if is_user_in_channel(call.message.chat.id, config.id_of_chat_vectra_montajniki()):
                 bot.send_message(call.message.chat.id, "Регистрация завершена.")
+                scheduler.remove_job(f"{call.message.chat.id}_register_confirmation_2_remind")
+                scheduler.remove_job(f"{call.message.chat.id}_register_confirmation_1_remind")
             else:
                 bot.answer_callback_query(call.id, "Для завершения регистрации необходимо вступить в чат.",
                                           show_alert=True)
@@ -280,10 +306,10 @@ def msg_to_profile(user_id: int):
     markup.add(types.InlineKeyboardButton("📞 Изменить контактный телефон", callback_data="change+/+phone_number"))
     user_data_text = f"""Ваши текущие данные:
             
-    <b>📋 Виды работ:</b> {", ".join(config.define_list_of_jobs_only_useful(user.user_id))}
-    🏙 <b>Город:</b> {user.city_name}
-    📍 <b>Радиус работы:</b> {"Вся Россия" if user.city_name == "Россия" else user.radius}
-    📞 <b>Контактный телефон:</b> {user.phone_number}
+<b>📋 Виды работ:</b> {", ".join(config.define_list_of_jobs_only_useful(user.user_id))}
+🏙 <b>Город:</b> {user.city_name}
+📍 <b>Радиус работы:</b> {"Вся Россия" if user.city_name == "Россия" else user.radius}
+📞 <b>Контактный телефон:</b> {user.phone_number}
     """
     return bot.send_message(user_id, user_data_text, reply_markup=markup)
 
@@ -322,6 +348,11 @@ def registration_city_defining(msg):
     user = data_base_functions.SQLiteUser(msg.chat.id)
     proposed_city_list = config.find_similar_cities(msg.text)
     if msg.text in proposed_city_list:
+        text_to_remind = ("Указание радиуса работ необходимо для того, чтобы координатор клуба имел представление "
+                          "о географии вашей деятельности. Это позволит ему лучше понимать, на какие заказы вы можете "
+                          "претендовать и насколько быстро сможете добраться до места работы.\n\n"
+                          "Вы не указали радиус, давайте сделаем ещё одну попытку.")
+        schedule_reminder(msg.chat.id, f"{msg.chat.id}_location_remind", 30, text_to_remind)
         user.change_city(msg.text)
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         markup.add(types.KeyboardButton("Поделиться геолокацией", request_location=True))
@@ -337,6 +368,15 @@ def registration_city_defining(msg):
     else:
         msg = bot.send_message(msg.chat.id, "Такого города нет в списке, пожалуйста проверьте правильность ввода.")
         bot.register_next_step_handler(msg, registration_city_defining)
+
+
+def send_reminder(chat_id, text_of_reminder):
+    bot.send_message(chat_id, text_of_reminder)
+
+
+def schedule_reminder(chat_id, message_id, time_to_remind, text_of_reminder):
+    run_date = datetime.now() + timedelta(minutes=time_to_remind)
+    scheduler.add_job(send_reminder, 'date', run_date=run_date, args=[chat_id, text_of_reminder], id=str(message_id))
 
 
 if __name__ == '__main__':

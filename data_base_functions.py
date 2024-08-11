@@ -9,6 +9,7 @@ def get_connection():
 
 class SQLiteUser:
     id = int
+
     def __init__(self, user_id: int, user_name: str = None):
         with get_connection() as connection:
             cursor = connection.cursor()
@@ -68,3 +69,15 @@ class SQLiteUser:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('UPDATE User SET phone_number = ? WHERE user_id = ?', (phone_number, self.user_id))
+
+
+def check_radius_exists(user_id):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT radius FROM User WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+
+    if result and result[0] is not None:
+        return True
+    else:
+        return False

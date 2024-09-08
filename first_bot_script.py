@@ -64,9 +64,9 @@ def text_message_handler(message):
             text_to_remind = "Вы не можете завершить регистрацию без вступления в закрытый чат"
             schedule_reminder(message.chat.id, f"{message.chat.id}_register_confirmation_2_remind", 120, text_to_remind)
         except Exception as eerr:
-            pass
+            print(eerr)
         markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("Подписаться", url="https://t.me/+CTnu89sSY9FiZDY9"))
+        markup.add(types.InlineKeyboardButton("Подписаться", url="https://t.me/+wxQ8vd1p-GxhYjFl"))
         markup.add(types.InlineKeyboardButton("Я подписался", callback_data="check_subscription_stage"))
         bot.send_message(
             message.chat.id, "Подпишитесь на закрытый Telegram-чат клуба, чтобы быть в курсе всех новостей: "
@@ -91,6 +91,14 @@ def text_message_handler(message):
                                           " бонусах в рамках программы: </b>")
         typing_action(message.chat.id, 6)
         bot.send_message(message.chat.id, text_messages_storage.message_definer(11), reply_markup=markup)
+    elif message.text == "Далее":
+        scheduler.remove_job(f"{message.chat.id}_location_remind")
+        user = data_base_functions.SQLiteUser(message.chat.id)
+        user.change_radius(9999)
+        typing_action(message.chat.id, 2)
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add(types.KeyboardButton("Поделиться контактом", request_contact=True))
+        bot.send_message(message.chat.id, text_messages_storage.message_definer(6), reply_markup=markup)
     elif message.text == "Личный кабинет":
         msg_to_profile(message.chat.id)
 
@@ -100,10 +108,10 @@ def contact_handler(message):
     user = data_base_functions.SQLiteUser(message.chat.id)
     user.change_phone_number(message.contact.phone_number)
     user_data_text = f"""
-Виды работ: {", ".join(config.define_list_of_jobs_only_useful(user.user_id))}
-Город: {user.city_name}
-Радиус работы: {"Вся Россия" if user.city_name == "Россия" else user.radius}
-Контактный телефон: {user.phone_number}
+<b>📋 Виды работ:</b> {", ".join(config.define_list_of_jobs_only_useful(user.user_id))}
+<b>🏙 Город:</b> {user.city_name}
+<b>📍 Радиус работы:</b> {"Вся Россия" if user.city_name == "Россия" else user.radius}
+📞 <b>Контактный телефон:</b> {user.phone_number}
 """ + text_messages_storage.message_definer(7)
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(types.InlineKeyboardButton("Завершить регистрацию", callback_data="finish_registration"))
@@ -131,12 +139,14 @@ def inline_handler(call):
 
             bot.send_message(call.message.chat.id, text_messages_storage.message_definer(3), reply_markup=markup)
         elif call.data == "start_of_registration":
-            bot.send_message(call.message.chat.id, "Ежемесячно мы получаем около 5 000 заявок на поставку и монтаж "
+            bot.send_message(call.message.chat.id, "Ежемесячно мы получаем около 👉 5 000 заявок на поставку и монтаж "
                                                    "зданий из сэндвич-панелей площадью от 800 м2.")
             typing_action(call.message.chat.id, 1)
             markup = define_job_markup(call.message.chat.id)
-            bot.send_message(call.message.chat.id, "Хотите получить доступ к этим заказам? Укажите "
-                                                   "виды работ, которые вы выполняете:", reply_markup=markup)
+            with open("woman_offer.jpeg", 'rb') as photo:
+                bot.send_photo(call.message.chat.id, photo=photo,
+                               caption="Хотите получить доступ к этим заказам? <b>Укажите "
+                                       "виды работ, которые вы выполняете:</b>", reply_markup=markup)
         elif call.data == "next_step_registration":
             msg = bot.send_message(call.message.chat.id, text_messages_storage.message_definer(4))
             text_to_remind = """Кажется, Вы забыли указать свой город. Давайте попробуем снова: из какого вы города?
@@ -157,14 +167,21 @@ def inline_handler(call):
             markup.add(types.KeyboardButton("Получить баллы"),
                        types.KeyboardButton("Подробнее про программу лояльности"))
             markup.add(types.KeyboardButton("Личный кабинет"))
-            bot.send_message(call.message.chat.id, text_messages_storage.message_definer(8), reply_markup=markup)
+            with open("referral_instructions.png", 'rb') as photo:
+                bot.send_photo(call.message.chat.id, photo,
+                               caption=text_messages_storage.message_definer(8), reply_markup=markup)
+            user = data_base_functions.SQLiteUser(call.message.chat.id)
+            bot.send_message(call.message.chat.id, text=text_messages_storage.message_definer(16))
         elif call.data == "back_to_profile":
             msg_to_profile(call.message.chat.id)
         elif call.data == "check_subscription_stage":
             if is_user_in_channel(call.message.chat.id, config.id_of_chat_vectra_montajniki()):
                 bot.send_message(call.message.chat.id, "Регистрация завершена.")
-                scheduler.remove_job(f"{call.message.chat.id}_register_confirmation_2_remind")
-                scheduler.remove_job(f"{call.message.chat.id}_register_confirmation_1_remind")
+                try:  # TODO SORRY FOR POOR CODE
+                    scheduler.remove_job(f"{call.message.chat.id}_register_confirmation_2_remind")
+                    scheduler.remove_job(f"{call.message.chat.id}_register_confirmation_1_remind")
+                except Exception as er:
+                    print("Small job conflict, it OK :)", er)
             else:
                 bot.answer_callback_query(call.id, "Для завершения регистрации необходимо вступить в чат.",
                                           show_alert=True)
@@ -321,6 +338,10 @@ def typing_action(user_id: int, seconds: int):
 
 def set_radius_registration(msg):
     if msg.text.isdigit():
+        if int(msg.text) <= 0 or int(msg.text) >= 40192:
+            bot.send_message(msg.chat.id, "Пожалуйста, введите радиус. Число, больше нуля и меньше 40192.")
+            bot.register_next_step_handler(msg, set_radius_registration)
+            return
         user = data_base_functions.SQLiteUser(msg.chat.id)
         user.change_radius(int(msg.text))
         typing_action(msg.chat.id, 2)
@@ -348,6 +369,7 @@ def registration_city_defining(msg):
     user = data_base_functions.SQLiteUser(msg.chat.id)
     proposed_city_list = config.find_similar_cities(msg.text)
     if msg.text in proposed_city_list:
+        scheduler.remove_job(f"{msg.chat.id}_city_remind")
         text_to_remind = ("Указание радиуса работ необходимо для того, чтобы координатор клуба имел представление "
                           "о географии вашей деятельности. Это позволит ему лучше понимать, на какие заказы вы можете "
                           "претендовать и насколько быстро сможете добраться до места работы.\n\n"
@@ -356,7 +378,10 @@ def registration_city_defining(msg):
         user.change_city(msg.text)
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         markup.add(types.KeyboardButton("Поделиться геолокацией", request_location=True))
-        bot.send_message(msg.chat.id, text_messages_storage.message_definer(5), reply_markup=markup)
+        markup.add(types.KeyboardButton("Далее"))
+        with open("geo_of_radius.png", 'rb') as photo:
+            bot.send_photo(msg.chat.id, photo, caption=text_messages_storage.message_definer(5),
+                           reply_markup=markup)
     elif proposed_city_list:
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         for city in proposed_city_list:

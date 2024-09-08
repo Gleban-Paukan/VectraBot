@@ -70,6 +70,45 @@ class SQLiteUser:
             cursor = conn.cursor()
             cursor.execute('UPDATE User SET phone_number = ? WHERE user_id = ?', (phone_number, self.user_id))
 
+    def change_balance(self, balance):
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE User SET balance = ? WHERE user_id = ?', (balance, self.user_id))
+
+    def change_manager(self, manager_id):
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE User SET manager = ? WHERE user_id = ?', (manager_id, self.user_id))
+
+    def change_object_description(self, object_description):
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE User SET object_description = ? WHERE user_id = ?',
+                           (object_description, self.user_id))
+
+    def change_types_of_completed_works(self, types_of_completed_works):
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE User SET types_of_completed_works = ? WHERE user_id = ?',
+                           (types_of_completed_works, self.user_id))
+
+    def change_average_price(self, average_price):
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE User SET average_price = ? WHERE user_id = ?', (average_price, self.user_id))
+
+    def change_path_to_images(self, path_to_images):
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE User SET path_to_images = ? WHERE user_id = ?',
+                           (path_to_images, self.user_id))
+
+    def change_email(self, email):
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE User SET email = ? WHERE user_id = ?',
+                           (email, self.user_id))
+
 
 def check_radius_exists(user_id):
     with get_connection() as conn:

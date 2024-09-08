@@ -7,9 +7,17 @@ from datetime import datetime, timedelta
 from telebot import types
 from requests import ReadTimeout
 import os
+
+from telebot.types import ForceReply
+
 import data_base_functions
 import config
 import text_messages_storage
+
+PHOTO_DIR = 'user_photos'
+
+if not os.path.exists(PHOTO_DIR):
+    os.makedirs(PHOTO_DIR)
 
 bot = telebot.TeleBot(config.second_bot_token())
 bot.parse_mode = 'html'
@@ -23,7 +31,33 @@ scheduler.start()
 
 @bot.message_handler(commands=['start'])
 def start_message_handler(message):
-    pass
+    user_id = message.chat.id  # TODO REMOVE JOB OF REGISTRATION REMIND BOT 1
+    user = data_base_functions.SQLiteUser(user_id)
+    if user.balance is None:
+        user.change_balance(1000)
+        # scheduler.remove_job(f"{user_id}_city_remind")
+        if data_base_functions.check_radius_exists(user_id):
+            schedule_reminder(user_id, f"{user_id}_register_confirmation_1_remind_second_bot", 2880,
+                              text_messages_storage.message_definer(19))
+            schedule_reminder(user_id, f"{user_id}_register_confirmation_2_remind_second_bot", 7200,
+                              text_messages_storage.message_definer(17))
+            schedule_reminder(user_id, f"{user_id}_register_confirmation_3_remind_second_bot", 1080,
+                              text_messages_storage.message_definer(18))
+            bot.send_message(user_id, text_messages_storage.message_definer(20),
+                             reply_markup=config.start_markup())
+            typing_action(user_id, 2)
+            bot.send_message(user_id, text_messages_storage.message_definer(12))
+            typing_action(user_id, 5)
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(
+                types.InlineKeyboardButton("Как получать заказы на монтаж?", callback_data="wanna_know_more_montage"),
+                types.InlineKeyboardButton("Узнать больше о программе лояльности",
+                                           callback_data="information_about_referral_program"))  # stupid value name
+            bot.send_message(user_id, f'Благодарим вас за регистрацию в профессиональном строительном сообществе '
+                                      f'"ВЕКТРА", ваш баланс бонусных баллов составляет: {user.balance}\n\n'
+                                      'Выберете, о чем вы хотели бы узнать подробнее', reply_markup=markup)
+    else:
+        bot.send_message(message.chat.id, "Возвращено в меню.", reply_markup=config.start_markup())
 
 
 @bot.message_handler(content_types=['text'])
@@ -47,35 +81,53 @@ def text_message_handler(message):
     elif message.text == "🏚 Мои заказы":
         bot.send_message(message.chat.id, "TODO")
     elif message.text == "👨‍💼 Мой менеджер":
-        bot.send_message(message.chat.id, "TODO")
-
+        user = data_base_functions.SQLiteUser(message.chat.id)
+        if user.manager is None:
+            schedule_manager(message.chat.id)
+            bot.send_message(message.chat.id, "Ваша заявка на подбор принята!")
+            bot.send_message(message.chat.id, "Подберем для вас самого лучшего менеджера и обязательно вас познакомим!"
+                                              "\n\nОбычно это занимает не более 3 часов ⏰")
+            user.change_manager("SEARCHING")
+        elif user.manager == "SEARCHING":
+            bot.send_message(message.chat.id,
+                             "Пока у вас нет личного менеджера, но скоро появится, ваша заявка в работе!")
+        else:
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(types.InlineKeyboardButton("Связаться в Telegram", url="https://t.me/+79370602463"),
+                       types.InlineKeyboardButton("Связаться в WhatsApp", url="https://wa.me/79370602463"))
+            bot.send_message(message.chat.id,
+                             "Ваш персональный менеджер — <b>Мария</b>.\nКонтактный номер: <b>+79370602463</b>\n"
+                             "Электронная почта: <b>m.lukyanova@vektra.online</b>",
+                             reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda call: True)
 def inline_handler(call):
     deleting_flag = True
-    if call.data == "wanna_know_more":
-        scheduler.remove_job(f"{call.message.chat.id}_register_confirmation_1_remind")
-        scheduler.remove_job(f"{call.message.chat.id}_register_confirmation_2_remind")
-        scheduler.remove_job(f"{call.message.chat.id}_register_confirmation_3_remind")
+    if call.data == "wanna_know_more_montage":
+        scheduler.remove_job(f"{call.message.chat.id}_register_confirmation_1_remind_second_bot")
+        scheduler.remove_job(f"{call.message.chat.id}_register_confirmation_2_remind_second_bot")
+        scheduler.remove_job(f"{call.message.chat.id}_register_confirmation_3_remind_second_bot")
         markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(types.InlineKeyboardButton("Да", callback_data="example_message"),
                    types.InlineKeyboardButton("Нет", callback_data="dont_need_example_message"))
-        bot.send_message(call.message.chat.id, text_messages_storage.message_definer(14), reply_markup=markup)
+        bot.send_message(call.message.chat.id, text_messages_storage.message_definer(14))
+        bot.send_message(call.message.chat.id, "Хотите посмотреть пример такого сообщения?", reply_markup=markup)
     elif call.data == "example_message":
         markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(types.InlineKeyboardButton("Мне интересно", callback_data="ZAGLUSHKA"))
-        bot.send_message(call.message.chat.id, text_messages_storage.message_definer(15))
+        markup.add(types.InlineKeyboardButton("Взять заказ", callback_data="finish_of_example_message"),
+                   types.InlineKeyboardButton("Отказ", callback_data="finish_of_example_message"))
+        bot.send_message(call.message.chat.id, text_messages_storage.message_definer(21))
+        typing_action(call.message.chat.id, 2)
+        bot.send_message(call.message.chat.id, "Далее вам необходимо выбрать: возьмете вы заказ или нет.")
+        bot.send_message(call.message.chat.id, "Давайте попробуем:", reply_markup=markup)
+    elif call.data == "finish_of_example_message":
+        bot.send_message(call.message.chat.id, "Отлично, теперь вы знаете, как работает наш чат-бот! Как только у "
+                                               "нас появятся актуальные заявки на монтаж, я сразу же сообщу вам об этом."
+                                               " Благодарю вас за ожидание и надеюсь на дальнейшее сотрудничество!")
     elif call.data == "information_about_referral_program":
-        bot.send_message(call.message.chat.id, "<b>Знакомим вас подробнее с системой программы лояльности</b>")
-        typing_action(call.message.chat.id, 1)
-        bot.send_message(call.message.chat.id, text_messages_storage.message_definer(9))
-        typing_action(call.message.chat.id, 4)
-        bot.send_message(call.message.chat.id,
-                         "<b>Но это еще не все! Сейчас расскажем, какие дополнительные преимущества "
-                         "вы получите, воспользовавшись нашей программой лояльности. </b>")
-        typing_action(call.message.chat.id, 5)
-        bot.send_message(call.message.chat.id, text_messages_storage.message_definer(10))
+        with open("referral_instructions.png", "rb") as photo:
+            bot.send_photo(call.message.chat.id, caption=text_messages_storage.message_definer(8), photo=photo)
         typing_action(call.message.chat.id, 1)
         bot.send_message(call.message.chat.id, "<b>Уже захотелось стать участником программы лояльности? "
                                                "А чтобы окончательно отбросить все ваши сомнения рассказываем об акциях"
@@ -83,6 +135,7 @@ def inline_handler(call):
         typing_action(call.message.chat.id, 6)
         bot.send_message(call.message.chat.id, text_messages_storage.message_definer(11),
                          reply_markup=config.start_markup())
+        deleting_flag = False
 
     elif call.data == "get_user_balance":
         bot.send_message(call.message.chat.id, "TODO", reply_markup=config.start_markup())
@@ -124,6 +177,24 @@ def inline_handler(call):
                                                          "которое готовы взять в работу.",
                                    reply_markup=markup)
             bot.register_next_step_handler(msg, change_radius)
+    elif call.data == "add_additional_information":
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        buttons = [
+            types.InlineKeyboardButton("Описание объекта", callback_data="description"),
+            types.InlineKeyboardButton("Вид выполненных работ", callback_data="work_type"),
+            types.InlineKeyboardButton("Средняя стоимость за м²", callback_data="cost"),
+            types.InlineKeyboardButton("Загрузить фотографии", callback_data="upload_photos"),
+            types.InlineKeyboardButton("Указать сайт", callback_data="website"),
+            types.InlineKeyboardButton("Указать почту", callback_data="email")
+        ]
+        markup.add(*buttons)
+        bot.send_message(call.message.chat.id, "Выберите, что хотите указать:", reply_markup=markup)
+
+    elif call.data in ["description", "work_type", "cost", "website", "email"]:
+        request_data(call)
+    elif call.data == "upload_photos":
+        bot.send_message(call.message.chat.id, "Пожалуйста, загрузите 3-4 фотографии объектов.")
+        bot.register_next_step_handler(call.message, handle_photos)
     elif call.data == "back_to_menu":
         msg_to_profile(call.message.chat.id)
     if deleting_flag:
@@ -132,20 +203,82 @@ def inline_handler(call):
 
 @bot.message_handler(content_types=['new_chat_members'])
 def new_member_handler(message):
-    user_id = message.json['new_chat_participant']['id']
+    user_id = message.json['new_chat_participant']['id']  # TODO REMOVE JOB OF REGISTRATION REMIND BOT 1
+    # scheduler.remove_job(f"{user_id}_city_remind")
     if data_base_functions.check_radius_exists(user_id):
-        schedule_reminder(user_id, f"{user_id}_register_confirmation_1_remind", 2880, "text_to_remind1")
-        schedule_reminder(user_id, f"{user_id}_register_confirmation_2_remind", 7200, "text_to_remind2")
-        schedule_reminder(user_id, f"{user_id}_register_confirmation_3_remind", 1080, "text_to_remind3")
-        bot.send_message(user_id, "Привет! На связи виртуальный ассистент клуба @name (Надо придумать)",
+        schedule_reminder(user_id, f"{user_id}_register_confirmation_1_remind_second_bot", 2880,
+                          text_messages_storage.message_definer(19))
+        schedule_reminder(user_id, f"{user_id}_register_confirmation_2_remind_second_bot", 7200,
+                          text_messages_storage.message_definer(17))
+        schedule_reminder(user_id, f"{user_id}_register_confirmation_3_remind_second_bot", 1080,
+                          text_messages_storage.message_definer(18))
+        bot.send_message(user_id, text_messages_storage.message_definer(20),
                          reply_markup=config.start_markup())
         typing_action(user_id, 2)
         bot.send_message(user_id, text_messages_storage.message_definer(12))
         typing_action(user_id, 5)
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
-            types.InlineKeyboardButton("Хотите узнать больше?", callback_data="wanna_know_more"))  # stupid value name
+            types.InlineKeyboardButton("Как получать заказы на монтаж?", callback_data="wanna_know_more_montage"),
+            types.InlineKeyboardButton("Узнать больше о программе лояльности",
+                                       callback_data="information_about_referral_program"))  # stupid value name
         bot.send_message(user_id, text_messages_storage.message_definer(13), reply_markup=markup)
+
+
+def handle_photos(message):
+    if message.content_type == 'photo':
+        try:
+            path_to_images = []
+            for media in message.photo:
+                file_info = bot.get_file(media.file_id)
+                downloaded_file = bot.download_file(file_info.file_path)
+                photo_path = os.path.join(PHOTO_DIR, f"{message.chat.id}_{file_info.file_unique_id}.jpg")
+                path_to_images.append(f"{message.chat.id}_{file_info.file_unique_id}.jpg")
+                with open(photo_path, 'wb') as new_file:
+                    new_file.write(downloaded_file)
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(
+                types.InlineKeyboardButton("Продолжить заполнение профиля", callback_data="add_additional_information"))
+            user = data_base_functions.SQLiteUser(message.chat.id)
+            user.change_path_to_images(" ".join(path_to_images))
+            bot.send_message(message.chat.id, "Фотографии сохранены.", reply_markup=markup)
+        except Exception as er:
+            print(er)
+            bot.send_message(message.chat.id, "Что-то пошло не так. Попробуйте еще раз или напишите в поддержку.")
+    else:
+        bot.send_message(message.chat.id, "Пожалуйста, загрузите фотографию.")
+
+
+def request_data(call):
+    messages = {
+        "description": "Напишите, какие виды объектов вы берете в работу (гараж, бытовка, ангар, торговые помещения и так далее).",
+        "work_type": "Напишите, какие виды работ вы выполняете.",
+        "cost": "Укажите среднюю стоимость за м².",
+        "website": "Укажите сайт, если есть.",
+        "email": "Укажите почту."
+    }
+
+    msg = bot.send_message(call.message.chat.id, messages[call.data])
+    bot.register_next_step_handler(msg, save_user_data, call.data)
+
+
+def save_user_data(message, key):
+    user_id = message.from_user.id
+    user = data_base_functions.SQLiteUser(user_id)
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("Продолжить заполнение профиля", callback_data="add_additional_information"))
+    if key == "description":
+        user.change_object_description(message.text)
+    elif key == "work_type":
+        user.change_types_of_completed_works(message.text)
+    elif key == "cost":
+        user.change_average_price(message.text)
+    elif key == "website":
+        user.change_path_to_images(message.text)
+    elif key == "email":
+        user.change_email(message.text)
+
+    bot.send_message(message.chat.id, "<b>Данные сохранены.</b>", reply_markup=markup)
 
 
 def define_job_markup(user_id, additional_call_data_forward="next_step_registration", flag_is_required=True):
@@ -233,6 +366,8 @@ def msg_to_profile(user_id: int, back_to_menu_flag=False):
     markup.add(types.InlineKeyboardButton("🏙 Изменить город", callback_data="change+/+city_name"))
     markup.add(types.InlineKeyboardButton("📍 Изменить радиус работы", callback_data="change+/+radius"))
     markup.add(types.InlineKeyboardButton("📞 Изменить контактный телефон", callback_data="change+/+phone_number"))
+    markup.add(
+        types.InlineKeyboardButton("✍️ Дополнительно заполнить профиль", callback_data="add_additional_information"))
     user_data_text = f"""Ваши текущие данные:
             
 <b>📋 Виды работ:</b> {", ".join(config.define_list_of_jobs_only_useful(user.user_id))}
@@ -247,9 +382,31 @@ def send_reminder(chat_id, text_of_reminder):
     bot.send_message(chat_id, text_of_reminder)
 
 
+def add_manager(chat_id):
+    user = data_base_functions.SQLiteUser(chat_id)
+    user.change_manager("Maria")
+    text = """Персональный менеджер будет сопровождать вас на всех этапах сделки 📞
+
+<b>Знакомьтесь — Мария
+Контактный номер: +7 937 060 24 63</b>
+
+Звоните и пишите, если возникнут сложности!
+
+Объекты реализованные менеджером:
+Список объектов
+
+Мария свяжется с вами в ближайшее время с целью знакомства и обсуждения планов."""
+    bot.send_message(chat_id, text)
+
+
 def schedule_reminder(chat_id, message_id, time_to_remind, text_of_reminder):
     run_date = datetime.now() + timedelta(minutes=time_to_remind)
     scheduler.add_job(send_reminder, 'date', run_date=run_date, args=[chat_id, text_of_reminder], id=str(message_id))
+
+
+def schedule_manager(chat_id):
+    run_date = datetime.now() + timedelta(minutes=123)
+    scheduler.add_job(add_manager, 'date', run_date=run_date, args=[chat_id], id=f"{chat_id}_manager_search")
 
 
 if __name__ == '__main__':

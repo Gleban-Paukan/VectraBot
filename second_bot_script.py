@@ -20,6 +20,10 @@ if not os.path.exists(PHOTO_DIR):
     os.makedirs(PHOTO_DIR)
 
 bot = telebot.TeleBot(config.second_bot_token())
+designer_bot = telebot.TeleBot(config.designer_bot_token())
+admin_bot = telebot.TeleBot(config.third_bot_token())
+admin_bot.parse_mode = "html"
+designer_bot.parse_mode = "html"
 bot.parse_mode = 'html'
 
 jobstores = {
@@ -27,6 +31,9 @@ jobstores = {
 }
 scheduler = BackgroundScheduler(jobstores=jobstores)
 scheduler.start()
+photos_dict = {}
+user_states = {}
+designers = [1493818085, 1125076741]  # 1223719258
 
 
 @bot.message_handler(commands=['start'])
@@ -60,6 +67,77 @@ def start_message_handler(message):
         bot.send_message(message.chat.id, "Возвращено в меню.", reply_markup=config.start_markup())
 
 
+@bot.message_handler(
+    func=lambda message: message.chat.id in user_states and user_states[message.chat.id]['expected_photos'] == 0,
+    content_types=['text'])
+def set_expected_photos(message):
+    """Устанавливает ожидаемое количество фотографий в альбоме от пользователя."""
+    try:
+        if message.text == "/cancel":
+            bot.send_message(message.chat.id, "Ввод фотографий отменен.")
+            del user_states[message.chat.id]
+            return
+        num_photos = int(message.text)
+        if num_photos <= 0:
+            raise ValueError("Количество фотографий должно быть больше 0.")
+        if num_photos == 1:
+            bot.send_message(message.chat.id,
+                             "Необходимо загрузить более одной фотографии. Попробуйте еще раз.\n"
+                             "Нажмите <b>/cancel</b>, чтобы отменить ввод")
+            return
+        elif num_photos >= 10:
+            bot.send_message(message.chat.id,
+                             "Слишком много фотографий. Попробуйте еще раз.\n"
+                             "Нажмите <b>/cancel</b>, чтобы отменить ввод")
+            return
+        user_states[message.chat.id]['expected_photos'] = num_photos
+        bot.send_message(message.chat.id, f"Отправьте {num_photos} фотографий.")
+    except ValueError:
+        bot.send_message(message.chat.id, "Пожалуйста, введите правильное количество фотографий.")
+
+
+@bot.message_handler(content_types=['photo'])
+def handle_photos(message):
+    """Обрабатывает фотографии, добавляя их в список для текущего пользователя, и сохраняет их по достижении нужного количества."""
+    chat_id = message.chat.id
+
+    # Проверяем, ожидает ли пользователь загрузку фотографий
+    if chat_id in user_states:
+        user_states[chat_id]
+
+        # Проверяем, установлено ли ожидаемое количество фотографий и не превышено ли оно
+        if user_states[chat_id]['expected_photos'] > 0 and user_states[chat_id]['received_photos'] < \
+                user_states[chat_id]['expected_photos']:
+            # Получаем информацию о фото в самом высоком разрешении и сохраняем его
+            file_info = bot.get_file(message.photo[-1].file_id)  # Используем самое большое разрешение фото
+            downloaded_file = bot.download_file(file_info.file_path)
+            photo_path = os.path.join(PHOTO_DIR, f"{chat_id}_{file_info.file_unique_id}.jpg")
+
+            with open(photo_path, 'wb') as new_file:
+                new_file.write(downloaded_file)
+
+            # Добавляем путь к сохраненной фотографии
+            user_states[chat_id]['photos'].append(photo_path)
+            user_states[chat_id]['received_photos'] += 1
+            # Если все фотографии получены, сохраняем их в базу данных и отправляем сообщение
+            if user_states[chat_id]['received_photos'] == user_states[chat_id]['expected_photos']:
+                save_album_to_db(chat_id, user_states[chat_id]['photos'])
+                # Очищаем состояние пользователя
+                del user_states[chat_id]
+
+
+def save_album_to_db(chat_id, photo_paths):
+    """Сохраняет все фото из альбома в базу данных и отправляет сообщение об успешном сохранении."""
+    path_to_images = " ".join(photo_paths)
+    user = data_base_functions.SQLiteUser(chat_id)
+    user.change_path_to_images(path_to_images)
+
+    # Отправляем сообщение пользователю
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("Продолжить заполнение профиля", callback_data="add_additional_information"))
+    bot.send_message(chat_id, "Все фотографии сохранены успешно.", reply_markup=markup)
+
+
 @bot.message_handler(content_types=['text'])
 def text_message_handler(message):
     if message.text == "🎁 Программа лояльности":
@@ -79,7 +157,29 @@ def text_message_handler(message):
     elif message.text == "📝 Рассказать о своем проекте":
         bot.send_message(message.chat.id, "TODO")
     elif message.text == "🏚 Мои заказы":
-        bot.send_message(message.chat.id, "TODO")
+        user = data_base_functions.SQLiteUser(message.chat.id)
+        if user.orders_id is None:
+            bot.send_message(message.chat.id, text_messages_storage.message_definer(22))
+        else:
+            if len(user.orders_id.split()) > 1:
+                bot.send_message(message.chat.id, "Список ваших заказов:")
+            for order_id in user.orders_id.split():
+                order_data = data_base_functions.get_order_data(order_id)[0]
+                square = order_data[1]
+                city = order_data[2]
+                jobs = order_data[3].split(",")
+                address = order_data[4]
+                text = f"""
+Информация по заказу:
+    
+🔨Виды работ:
+<b>
+{'\n'.join(jobs)}
+</b>
+📍Объект по адресу: <b>{city}, {address}</b>
+📏Объем: {square} м²           
+    """
+                bot.send_message(message.chat.id, text)
     elif message.text == "👨‍💼 Мой менеджер":
         user = data_base_functions.SQLiteUser(message.chat.id)
         if user.manager is None:
@@ -142,7 +242,7 @@ def inline_handler(call):
     elif call.data == "call_to_qualifier":
         bot.send_message(call.message.chat.id, "TODO", reply_markup=config.start_markup())
     elif call.data == "FAQ":
-        bot.send_message(call.message.chat.id, "TODO", reply_markup=config.start_markup())
+        bot.send_message(call.message.chat.id, text_messages_storage.message_definer(23), reply_markup=config.start_markup())
     elif "toggle+/+" in call.data:
         job_data = call.data.split("+/+")
         job_name = job_data[1]
@@ -177,15 +277,56 @@ def inline_handler(call):
                                                          "которое готовы взять в работу.",
                                    reply_markup=markup)
             bot.register_next_step_handler(msg, change_radius)
+    elif "order+/+" in call.data:
+        order_id = call.data.split("+/+")[1]
+        order_data = data_base_functions.get_order_data(order_id)[0]
+        square = order_data[1]
+        city = order_data[2]
+        jobs = order_data[3].split(",")
+        address = order_data[4]
+        user = data_base_functions.SQLiteUser(call.message.chat.id)
+        user.add_order(order_id)
+        bot.send_message(call.message.chat.id,
+                         "Отлично! Скоро с Вами свяжется ваш персональный менеджер и уточнит детали заказа.")
+        text = f"""
+На заявку <code>{order_id}</code> откликнулись!
+
+Информация по заявке:
+
+Виды работ:
+<b>
+{'\n'.join(jobs)}
+</b>
+Объект по адресу: {city}, {address}
+Объем: {square} м²
+
+Информация по заказчику:
+
+
+Telegram ID: <code>{user.user_id}</code>
+AMOCRM ID: <code>{user.lead_id}</code>
+Номер телефона: <b>{user.phone_number}</b>
+"""
+        for admin_id in data_base_functions.get_admins_list()[0]:
+            admin_bot.send_message(admin_id, text)
+
     elif call.data == "add_additional_information":
         markup = types.InlineKeyboardMarkup(row_width=2)
+        user = data_base_functions.SQLiteUser(call.message.chat.id)
         buttons = [
-            types.InlineKeyboardButton("Описание объекта", callback_data="description"),
-            types.InlineKeyboardButton("Вид выполненных работ", callback_data="work_type"),
-            types.InlineKeyboardButton("Средняя стоимость за м²", callback_data="cost"),
-            types.InlineKeyboardButton("Загрузить фотографии", callback_data="upload_photos"),
-            types.InlineKeyboardButton("Указать сайт", callback_data="website"),
-            types.InlineKeyboardButton("Указать почту", callback_data="email")
+            types.InlineKeyboardButton(f"{user.define_check_mark('object_description')} Описание объекта",
+                                       callback_data="description"),
+            types.InlineKeyboardButton(f"{user.define_check_mark('types_of_completed_works')} Вид выполненных работ",
+                                       callback_data="work_type"),
+            types.InlineKeyboardButton(f"{user.define_check_mark('average_price')} Средняя стоимость за м²",
+                                       callback_data="cost"),
+            types.InlineKeyboardButton(f"{user.define_check_mark('path_to_images')} Загрузить фотографии",
+                                       callback_data="upload_photos"),
+            types.InlineKeyboardButton(f"{user.define_check_mark('email')} Указать сайт", callback_data="website"),
+            types.InlineKeyboardButton(f"{user.define_check_mark('site')} Указать почту", callback_data="email"),
+            types.InlineKeyboardButton(
+                f"{user.define_check_mark('path_to_portfolio')} Отправить заявку на создание портфолио",
+                callback_data="request_portfolio")
         ]
         markup.add(*buttons)
         bot.send_message(call.message.chat.id, "Выберите, что хотите указать:", reply_markup=markup)
@@ -193,8 +334,59 @@ def inline_handler(call):
     elif call.data in ["description", "work_type", "cost", "website", "email"]:
         request_data(call)
     elif call.data == "upload_photos":
-        bot.send_message(call.message.chat.id, "Пожалуйста, загрузите 3-4 фотографии объектов.")
-        bot.register_next_step_handler(call.message, handle_photos)
+        bot.send_message(call.message.chat.id, "Введите количество фотографий, которые хотите загрузить (3-4 фото).")
+        user_states[call.message.chat.id] = {'expected_photos': 0, 'received_photos': 0, 'photos': []}
+        # bot.register_next_step_handler(call.message, handle_photos)
+    elif call.data == "request_portfolio":
+        user = data_base_functions.SQLiteUser(call.message.chat.id)
+        user_data = [user.__getattribute__(i) for i in ["object_description", "types_of_completed_works",
+                                                        "average_price", "path_to_images", "email"]]
+        if any(i is None for i in user_data):
+            bot.answer_callback_query(call.id, "Чтобы отправить заявку дизайнеру, необходимо заполнить все данные.")
+            return
+
+        text = f"""
+Проверьте, пожалуйста, данные:
+
+🏢 Описание объекта: <b>{user.object_description}</b>
+🛠 Вид выполненных работ: <b>{user.types_of_completed_works}</b>
+💰 Средняя стоимость за м²: <b>{user.average_price}</b>
+📧 Электронная почта: <b>{user.email}</b>
+🌐 Сайт{" не указан" if user.site is None else f': <b>{user.site}</b>'}
+"""
+        media = []
+        for path in user.path_to_images.split():
+            media.append(types.InputMediaPhoto(types.InputFile(path)))
+        bot.send_media_group(call.message.chat.id, media=media)
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        buttons = [types.InlineKeyboardButton("Нет, изменить данные.", callback_data="add_additional_information"),
+                   types.InlineKeyboardButton("Отправить заявку дизайнеру", callback_data="send_to_designer")]
+        markup.add(*buttons)
+        deleting_flag = False
+        bot.send_message(call.message.chat.id, text, reply_markup=markup)
+
+    elif call.data == "send_to_designer":
+        user = data_base_functions.SQLiteUser(call.message.chat.id)
+        text = f"""
+Поступила новая заявка на портфолио:
+ID: <code>{user.user_id}</code>
+
+🏢 Описание объекта: <b>{user.object_description}</b>
+🛠 Вид выполненных работ: <b>{user.types_of_completed_works}</b>
+💰 Средняя стоимость за м²: <b>{user.average_price}</b>
+📧 Электронная почта: <b>{user.email}</b>
+🌐 Сайт{" не указан" if user.site is None else f': <b>{user.site}</b>'}
+"""
+        media = []
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(types.InlineKeyboardButton("Отправить портфолио", callback_data=f"request_pdf_{user.user_id}"))
+        for path in user.path_to_images.split():
+            media.append(types.InputMediaPhoto(types.InputFile(path)))
+        for designer in designers:
+            designer_bot.send_media_group(designer, media=media)
+            designer_bot.send_message(designer, text, reply_markup=markup)
+        bot.send_message(call.message.chat.id,
+                         "Заявка отправлена. Обычно наш дизайнер обрабатывает заявки в течение одного рабочего дня.")
     elif call.data == "back_to_menu":
         msg_to_profile(call.message.chat.id)
     if deleting_flag:
@@ -225,29 +417,67 @@ def new_member_handler(message):
         bot.send_message(user_id, text_messages_storage.message_definer(13), reply_markup=markup)
 
 
-def handle_photos(message):
-    if message.content_type == 'photo':
-        try:
-            path_to_images = []
-            for media in message.photo:
-                file_info = bot.get_file(media.file_id)
-                downloaded_file = bot.download_file(file_info.file_path)
-                photo_path = os.path.join(PHOTO_DIR, f"{message.chat.id}_{file_info.file_unique_id}.jpg")
-                path_to_images.append(f"{message.chat.id}_{file_info.file_unique_id}.jpg")
-                with open(photo_path, 'wb') as new_file:
-                    new_file.write(downloaded_file)
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            markup.add(
-                types.InlineKeyboardButton("Продолжить заполнение профиля", callback_data="add_additional_information"))
-            user = data_base_functions.SQLiteUser(message.chat.id)
-            user.change_path_to_images(" ".join(path_to_images))
-            bot.send_message(message.chat.id, "Фотографии сохранены.", reply_markup=markup)
-        except Exception as er:
-            print(er)
-            bot.send_message(message.chat.id, "Что-то пошло не так. Попробуйте еще раз или напишите в поддержку.")
-    else:
-        bot.send_message(message.chat.id, "Пожалуйста, загрузите фотографию.")
+# @bot.message_handler(content_types=['photo'])
+# def handle_photos(message):
+#     # Если сообщение принадлежит альбому (группе медиафайлов)
+#     if message.media_group_id:
+#         # Проверяем, есть ли уже записи для текущего media_group_id
+#         if message.media_group_id not in photos_dict:
+#             photos_dict[message.media_group_id] = []
+#
+#         # Получаем информацию о фото в самом высоком разрешении и сохраняем его
+#         file_info = bot.get_file(message.photo[-1].file_id)  # Используем самое большое разрешение фото
+#         downloaded_file = bot.download_file(file_info.file_path)
+#         photo_path = os.path.join(PHOTO_DIR, f"{message.chat.id}_{file_info.file_unique_id}.jpg")
+#
+#         with open(photo_path, 'wb') as new_file:
+#             new_file.write(downloaded_file)
+#
+#         # Добавляем путь к сохраненной фотографии
+#         photos_dict[message.media_group_id].append(photo_path)
+#
+#     # Если фото не принадлежит альбому, просто обрабатываем его отдельно
+#     if not message.media_group_id:
+#         handle_single_photo(message)
+#
+#     # Если мы получили все фотографии из альбома, отправляем их пользователю
+#     # Обычно Telegram отправляет альбом в пределах нескольких секунд, поэтому проверяем длину списка
+#     if len(photos_dict[
+#                message.media_group_id]) >= 2:  # Устанавливаем порог на основе ожидаемого количества фотографий в альбоме
+#         save_album_to_db(message.chat.id, message.media_group_id)
 
+
+# def save_album_to_db(chat_id, media_group_id):
+#     """Сохраняет все фото из альбома в базу данных."""
+#     path_to_images = " ".join(photos_dict[media_group_id])
+#     user = data_base_functions.SQLiteUser(chat_id)
+#     user.change_path_to_images(path_to_images)
+#
+#     # Очистка временного хранилища после обработки
+#     print(photos_dict)
+#     # del photos_dict[media_group_id]
+#
+#     # Отправляем сообщение пользователю
+#     markup = types.InlineKeyboardMarkup(row_width=1)
+#     markup.add(types.InlineKeyboardButton("Продолжить заполнение профиля", callback_data="add_additional_information"))
+#     bot.send_message(chat_id, "Фотографии сохранены.", reply_markup=markup)
+#
+#
+# def handle_single_photo(message):
+#     """Обработка и сохранение одиночного фото."""
+#     file_info = bot.get_file(message.photo[-1].file_id)  # Используем самое большое разрешение фото
+#     downloaded_file = bot.download_file(file_info.file_path)
+#     photo_path = os.path.join(PHOTO_DIR, f"{message.chat.id}_{file_info.file_unique_id}.jpg")
+#
+#     with open(photo_path, 'wb') as new_file:
+#         new_file.write(downloaded_file)
+#
+#     # Сохраняем путь в базу данных
+#     user = data_base_functions.SQLiteUser(message.chat.id)
+#     user.change_path_to_images(photo_path)
+#
+#     # Отправляем сообщение пользователю
+#     bot.send_message(message.chat.id, "Фотография сохранена.")
 
 def request_data(call):
     messages = {
@@ -257,7 +487,6 @@ def request_data(call):
         "website": "Укажите сайт, если есть.",
         "email": "Укажите почту."
     }
-
     msg = bot.send_message(call.message.chat.id, messages[call.data])
     bot.register_next_step_handler(msg, save_user_data, call.data)
 
@@ -274,7 +503,7 @@ def save_user_data(message, key):
     elif key == "cost":
         user.change_average_price(message.text)
     elif key == "website":
-        user.change_path_to_images(message.text)
+        user.change_site(message.text)
     elif key == "email":
         user.change_email(message.text)
 
@@ -405,7 +634,7 @@ def schedule_reminder(chat_id, message_id, time_to_remind, text_of_reminder):
 
 
 def schedule_manager(chat_id):
-    run_date = datetime.now() + timedelta(minutes=123)
+    run_date = datetime.now() + timedelta(minutes=72)
     scheduler.add_job(add_manager, 'date', run_date=run_date, args=[chat_id], id=f"{chat_id}_manager_search")
 
 

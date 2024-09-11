@@ -10,6 +10,7 @@ import os
 import data_base_functions
 import config
 import text_messages_storage
+import api_amocrm
 
 bot = telebot.TeleBot(config.first_bot_token())
 bot.parse_mode = 'html'
@@ -67,7 +68,7 @@ def text_message_handler(message):
             print(eerr)
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(types.InlineKeyboardButton("Подписаться", url="https://t.me/+wxQ8vd1p-GxhYjFl"))
-        markup.add(types.InlineKeyboardButton("Я подписался", callback_data="check_subscription_stage"))
+        # markup.add(types.InlineKeyboardButton("Я подписался", callback_data="check_subscription_stage"))
         bot.send_message(
             message.chat.id, "Подпишитесь на закрытый Telegram-чат клуба, чтобы быть в курсе всех новостей: "
                              "закрытая информация по ценам и квотам с производственных площадок, данные о "
@@ -148,8 +149,10 @@ def inline_handler(call):
                                caption="Хотите получить доступ к этим заказам? <b>Укажите "
                                        "виды работ, которые вы выполняете:</b>", reply_markup=markup)
         elif call.data == "next_step_registration":
-            msg = bot.send_message(call.message.chat.id, text_messages_storage.message_definer(4))
-            text_to_remind = """Кажется, Вы забыли указать свой город. Давайте попробуем снова: из какого вы города?
+            markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+            markup.add(types.KeyboardButton("Вся Россия"))
+            msg = bot.send_message(call.message.chat.id, text_messages_storage.message_definer(4), reply_markup=markup)
+            text_to_remind = """Кажется, Вы забыли указать список городов. Давайте попробуем снова: в каких городах вы работаете?
 Нам необходима эта информация, чтобы сузить географию работ, когда мы будем искать для вас подходящий заказ"""
             schedule_reminder(msg.chat.id, f"{msg.chat.id}_city_remind", 30, text_to_remind)
             bot.register_next_step_handler(msg, registration_city_defining)
@@ -171,7 +174,18 @@ def inline_handler(call):
                 bot.send_photo(call.message.chat.id, photo,
                                caption=text_messages_storage.message_definer(8), reply_markup=markup)
             user = data_base_functions.SQLiteUser(call.message.chat.id)
-            bot.send_message(call.message.chat.id, text=text_messages_storage.message_definer(16))
+            lead_id = api_amocrm.create_lead(city=user.city_name, phone=user.phone_number, work_radius=user.radius,
+                                             points=user.balance, name=call.message.chat.id,
+                                             work_types=", ".join(
+                                                 config.define_list_of_jobs_only_useful(user.user_id)))
+            if lead_id is None:
+                bot.send_message(call.message.chat.id, "При создании лида произошла ошибка. Администрация оповещена.")
+            else:
+                user.change_lead_id(lead_id)
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(types.InlineKeyboardButton("Завершить регистрацию 👉",
+                                                  url="https://t.me/second_vectra_bot"))  # TODO CHANGE BOT URL
+            bot.send_message(call.message.chat.id, text=text_messages_storage.message_definer(16), reply_markup=markup)
         elif call.data == "back_to_profile":
             msg_to_profile(call.message.chat.id)
         elif call.data == "check_subscription_stage":
@@ -366,29 +380,49 @@ def is_user_in_channel(user_id, channel_id):
 
 
 def registration_city_defining(msg):
-    user = data_base_functions.SQLiteUser(msg.chat.id)
-    proposed_city_list = config.find_similar_cities(msg.text)
-    if msg.text in proposed_city_list:
+    if msg.text == "Вся Россия":
+        user = data_base_functions.SQLiteUser(msg.chat.id)
         scheduler.remove_job(f"{msg.chat.id}_city_remind")
-        text_to_remind = ("Указание радиуса работ необходимо для того, чтобы координатор клуба имел представление "
-                          "о географии вашей деятельности. Это позволит ему лучше понимать, на какие заказы вы можете "
-                          "претендовать и насколько быстро сможете добраться до места работы.\n\n"
-                          "Вы не указали радиус, давайте сделаем ещё одну попытку.")
-        schedule_reminder(msg.chat.id, f"{msg.chat.id}_location_remind", 30, text_to_remind)
+        user.change_radius(9999)
+        user.change_city("Россия")
+        typing_action(msg.chat.id, 2)
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add(types.KeyboardButton("Поделиться контактом", request_contact=True))
+        bot.send_message(msg.chat.id, text_messages_storage.message_definer(6), reply_markup=markup)
+    user = data_base_functions.SQLiteUser(msg.chat.id)
+    cities_list = msg.text.split()
+    cities_dict = {}
+    for city in cities_list:
+        cities_dict[city] = config.find_similar_cities(city)
+
+    if all(city in cities_dict[city] for city in cities_list):
+        scheduler.remove_job(f"{msg.chat.id}_city_remind")
+        # text_to_remind = ("Указание радиуса работ необходимо для того, чтобы координатор клуба имел представление "
+        # "о географии вашей деятельности. Это позволит ему лучше понимать, на какие заказы вы можете " "претендовать
+        # и насколько быстро сможете добраться до места работы.\n\n" "Вы не указали радиус, давайте сделаем ещё одну
+        # попытку.") schedule_reminder(msg.chat.id, f"{msg.chat.id}_location_remind", 30, text_to_remind)
         user.change_city(msg.text)
+        # markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        # markup.add(types.KeyboardButton("Поделиться геолокацией", request_location=True))
+        # markup.add(types.KeyboardButton("Далее"))
+        # with open("geo_of_radius.png", 'rb') as photo:
+        #     bot.send_photo(msg.chat.id, photo, caption=text_messages_storage.message_definer(5),
+        #                    reply_markup=markup)
+        user = data_base_functions.SQLiteUser(msg.chat.id)
+        user.change_radius(9999)
+        typing_action(msg.chat.id, 2)
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add(types.KeyboardButton("Поделиться геолокацией", request_location=True))
-        markup.add(types.KeyboardButton("Далее"))
-        with open("geo_of_radius.png", 'rb') as photo:
-            bot.send_photo(msg.chat.id, photo, caption=text_messages_storage.message_definer(5),
-                           reply_markup=markup)
-    elif proposed_city_list:
+        markup.add(types.KeyboardButton("Поделиться контактом", request_contact=True))
+        bot.send_message(msg.chat.id, text_messages_storage.message_definer(6), reply_markup=markup)
+    elif all(cities_dict[city] for city in cities_list):
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        for city in proposed_city_list:
-            markup.add(types.KeyboardButton(city))
+        proposed_text = []
+        for city in cities_list:
+            proposed_text.append(cities_dict[city][0])
+        markup.add(types.KeyboardButton(' '.join(proposed_text)))
         msg = bot.send_message(msg.chat.id,
-                               f"Такого города нет в списке. Возможно, вы имели в виду:\n"
-                               f"<b><i>{', '.join(proposed_city_list)}</i></b>", reply_markup=markup)
+                               f"Таких городов нет в списке. Возможно, вы имели в виду:\n"
+                               f"<b><i>{', '.join(proposed_text)}</i></b>", reply_markup=markup)
         bot.register_next_step_handler(msg, registration_city_defining)
     else:
         msg = bot.send_message(msg.chat.id, "Такого города нет в списке, пожалуйста проверьте правильность ввода.")

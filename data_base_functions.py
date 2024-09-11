@@ -103,11 +103,113 @@ class SQLiteUser:
             cursor.execute('UPDATE User SET path_to_images = ? WHERE user_id = ?',
                            (path_to_images, self.user_id))
 
+    def change_path_to_portfolio(self, path_to_portfolio):
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE User SET path_to_portfolio = ? WHERE user_id = ?',
+                           (path_to_portfolio, self.user_id))
+
     def change_email(self, email):
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('UPDATE User SET email = ? WHERE user_id = ?',
                            (email, self.user_id))
+
+    def change_lead_id(self, lead_id):
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE User SET lead_id = ? WHERE user_id = ?',
+                           (lead_id, self.user_id))
+
+    def change_site(self, site):
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE User SET site = ? WHERE user_id = ?',
+                           (site, self.user_id))
+
+    def add_order(self, order_id):
+        order_id = str(order_id) + " " + (self.orders_id if self.orders_id else "")
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE User SET orders_id = ? WHERE user_id = ?',
+                           (order_id, self.user_id))
+
+    def define_check_mark(self, attr):
+        return "✅" if self.__getattribute__(attr) is not None else ""
+
+
+def add_admin_id(user_id: int):
+    with get_connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute('SELECT * FROM Admin WHERE user_id = ?', (user_id,))
+        current_user = cursor.fetchone()
+        if not current_user:
+            cursor.execute(
+                'INSERT INTO Admin (user_id) '
+                'VALUES (?)',
+                (user_id,)
+            )
+
+
+def get_ids_for_order_notification(city):
+    query = """
+SELECT user_id 
+FROM User 
+WHERE city_name != ''  -- Проверяем, что список городов не пуст
+  AND (((' ' || city_name || ' ') LIKE ('% ' || ? || ' %'))  -- Проверяем наличие заданного города
+       OR ((' ' || city_name || ' ') LIKE ('% Россия %')));  -- Проверяем наличие "Россия" в списке городов
+"""
+
+    # Выполнение запроса
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, (city,))
+        results = cursor.fetchall()
+        return results
+
+
+def get_admins_list():
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM Admin")
+        results = cursor.fetchall()
+        return results
+
+
+def get_order_data(message_id):
+    query = f"""
+SELECT order_id, square, city, jobs, address
+FROM "Order" 
+WHERE order_id == (?)
+"""
+
+    # Выполнение запроса
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, (message_id,))
+        results = cursor.fetchall()
+        return results
+
+
+def add_order(order_id, square, city, jobs, address):
+    # Подключение к базе данных через get_connection()
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # SQL-запрос для вставки данных в таблицу Order
+    query = """
+    INSERT INTO "Order" (order_id, square, city, jobs, address)
+    VALUES (?, ?, ?, ?, ?)
+    """
+
+    try:
+        cursor.execute(query, (order_id, square, city, jobs, address))
+        conn.commit()  # Сохранение изменений в базе данных
+    except sqlite3.Error as e:
+        print(f"Ошибка при добавлении данных: {e}")
+    finally:
+        # Закрытие соединения
+        conn.close()
 
 
 def check_radius_exists(user_id):

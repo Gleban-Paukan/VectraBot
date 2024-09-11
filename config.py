@@ -47,6 +47,10 @@ def third_bot_token():
     return "7355945851:AAHcqCDBrT6T9RGBQTktlc_rrZFRXseHJDk"
 
 
+def designer_bot_token():
+    return "7129645821:AAF1xH2-z2OIqgVWoD9Al0dsFjI9j3WXEgo"
+
+
 def id_of_chat_vectra_montajniki():
     return -4598249871
 

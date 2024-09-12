@@ -35,6 +35,32 @@ jobs_kinds = {
 }
 
 
+@bot.callback_query_handler(func=lambda call: True)
+def inline_handler(call):
+    if "confirm_order" in call.data:
+        executor_id = int(call.data.split("+/+")[1])
+        order_id = int(call.data.split("+/+")[2])
+        order_data = data_base_functions.get_order_data(order_id)[0]
+        square = order_data[1]
+        city = order_data[2]
+        jobs = order_data[3].split(",")
+        address = order_data[4]
+        text = f"""
+Информация по заказу:
+    
+🔨Виды работ:
+<b>
+{'\n'.join(jobs)}
+</b>
+📍Объект по адресу: <b>{city}, {address}</b>
+📏Объем: {square} м²           
+            """
+        data_base_functions.change_order_status(order_id, "IN_WORK")
+        bot.send_message(call.message.chat.id, "Заказ взят в работу!")
+        second_bot.send_message(executor_id, f"Вас выбрали исполнителем в заказе №{order_id}\n\n" + text)
+
+
+
 @bot.message_handler(commands=['start'])
 def start_message_handler(message):
     data_base_functions.add_admin_id(message.chat.id)
@@ -133,6 +159,10 @@ def text_message_handler(message):
     if message.text == "Нет, заполнить заново!":
         bot.send_message(message.chat.id, "Укажите город и область, в котором планируется выполнять работы")
         bot.register_next_step_handler(message, register_city)
+    if "/finish" in message.text:
+        order_id = message.text.split("_")
+        data_base_functions.change_order_status(order_id, "COMPLETE")
+        bot.send_message(message.chat.id, f"Заказ {order_id} теперь завершён!")
 
 
 if __name__ == '__main__':

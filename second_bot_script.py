@@ -155,31 +155,13 @@ def text_message_handler(message):
     elif message.text == "👤 Мой профиль":
         msg_to_profile(message.chat.id)
     elif message.text == "📝 Рассказать о своем проекте":
-        bot.send_message(message.chat.id, "TODO")
+        bot.send_message(message.chat.id, text_messages_storage.message_definer(24))
     elif message.text == "🏚 Мои заказы":
-        user = data_base_functions.SQLiteUser(message.chat.id)
-        if user.orders_id is None:
-            bot.send_message(message.chat.id, text_messages_storage.message_definer(22))
-        else:
-            if len(user.orders_id.split()) > 1:
-                bot.send_message(message.chat.id, "Список ваших заказов:")
-            for order_id in user.orders_id.split():
-                order_data = data_base_functions.get_order_data(order_id)[0]
-                square = order_data[1]
-                city = order_data[2]
-                jobs = order_data[3].split(",")
-                address = order_data[4]
-                text = f"""
-Информация по заказу:
-    
-🔨Виды работ:
-<b>
-{'\n'.join(jobs)}
-</b>
-📍Объект по адресу: <b>{city}, {address}</b>
-📏Объем: {square} м²           
-    """
-                bot.send_message(message.chat.id, text)
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(types.InlineKeyboardButton("История заказов", callback_data="order_list"),
+                   types.InlineKeyboardButton("Отправить заявку на просчет",
+                                              callback_data="application_for_miscalculation"))
+        bot.send_message(message.chat.id, "Выберите опцию", reply_markup=markup)
     elif message.text == "👨‍💼 Мой менеджер":
         user = data_base_functions.SQLiteUser(message.chat.id)
         if user.manager is None:
@@ -242,7 +224,36 @@ def inline_handler(call):
     elif call.data == "call_to_qualifier":
         bot.send_message(call.message.chat.id, "TODO", reply_markup=config.start_markup())
     elif call.data == "FAQ":
-        bot.send_message(call.message.chat.id, text_messages_storage.message_definer(23), reply_markup=config.start_markup())
+        bot.send_message(call.message.chat.id, text_messages_storage.message_definer(23),
+                         reply_markup=config.start_markup())
+    elif call.data == "order_list":
+        user = data_base_functions.SQLiteUser(call.message.chat.id)
+        if user.orders_id is None:
+            bot.send_message(call.message.chat.id, text_messages_storage.message_definer(22))
+        else:
+            if len(user.orders_id.split()) > 1:
+                bot.send_message(call.message.chat.id, "Список ваших заказов:")
+            for order_id in user.orders_id.split():
+                order_data = data_base_functions.get_order_data(order_id)[0]
+                square = order_data[1]
+                city = order_data[2]
+                jobs = order_data[3].split(",")
+                address = order_data[4]
+                text = f"""
+Информация по заказу:
+    
+🔨Виды работ:
+<b>
+{'\n'.join(jobs)}
+</b>
+📍Объект по адресу: <b>{city}, {address}</b>
+📏Объем: {square} м²           
+        """
+                bot.send_message(call.message.chat.id, text)
+                deleting_flag = False
+    elif call.data == "application_for_miscalculation":
+        bot.send_message(call.message.chat.id, text_messages_storage.message_definer(24))
+        deleting_flag = False
     elif "toggle+/+" in call.data:
         job_data = call.data.split("+/+")
         job_name = job_data[1]
@@ -284,6 +295,10 @@ def inline_handler(call):
         city = order_data[2]
         jobs = order_data[3].split(",")
         address = order_data[4]
+        status = order_id[5]
+        if status != "WAITING":
+            bot.send_message(call.message.chat.id, "К сожалению, этот заказ уже выполняет другой исполнитель")
+            return
         user = data_base_functions.SQLiteUser(call.message.chat.id)
         user.add_order(order_id)
         bot.send_message(call.message.chat.id,
@@ -307,9 +322,11 @@ Telegram ID: <code>{user.user_id}</code>
 AMOCRM ID: <code>{user.lead_id}</code>
 Номер телефона: <b>{user.phone_number}</b>
 """
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton("Подтвердить заказ", callback_data=f"confirm_order+/+{call.message.chat.id}+/+{order_id}"))
         for admin_id in data_base_functions.get_admins_list()[0]:
-            admin_bot.send_message(admin_id, text)
-
+            admin_bot.send_message(admin_id, text, reply_markup=markup)
     elif call.data == "add_additional_information":
         markup = types.InlineKeyboardMarkup(row_width=2)
         user = data_base_functions.SQLiteUser(call.message.chat.id)
